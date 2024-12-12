@@ -1,0 +1,232 @@
+---
+title: "TCIA_Phenotypes"
+author: "Andrew Chen"
+date: "2023-08-08"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r Load Data}
+library(BiocManager)
+library(ConsensusClusterPlus)
+library(dendextend)
+library(sigclust)
+library(pheatmap) 
+library(ggplotify) 
+library(gplots)
+library(RColorBrewer)
+library(heatmap3)
+library(factoextra)
+library(gplots)
+library(survival)
+library(survminer)
+library(dplyr)
+library(tibble)
+initial_loaded = loadedNamespaces()
+
+myData = read.csv("C:/Users/awc2159/OneDrive - Columbia University Irving Medical Center/Documents/nestedComBatAllAveraged_diffPET_StrictZSC.csv", header = TRUE)
+
+covars = read.csv("C:/Users/awc2159/OneDrive - Columbia University Irving Medical Center/Documents/DiffLungPET_comBatCovars.csv",header=TRUE)
+
+dataLabels <- myData$Case
+```
+
+
+```{r Prepare Data for Clustering}
+
+myData$Case <- NULL
+featureLabels = names(myData)
+
+# Compute pairwise distances between cases using Euclidean distance
+caseCluster= as.dist(dist(myData, method= "euclidean"));
+
+#cluster the cases on radiomic feature distance based on Ward's method
+colCluster= hclust(caseCluster, method= "ward.D2");
+```
+
+
+```{r Cluster Features}
+
+featureCluster = t(myData); #features are now rows (transpose)
+
+# Compute pairwise distances between features using Euclidean distance
+featureCluster= as.dist(dist(featureCluster, method= "euclidean"));
+
+#cluster features based on Ward's method
+rowCluster = hclust(featureCluster, method= "ward.D2")
+
+
+data_vals<- t(myData)
+
+# Perform consensus clustering on the data
+result = ConsensusClusterPlus(data_vals, maxK=12, reps=50, pItem= 0.8, clusterAlg= "hc", distance="euclidean", innerLinkage= 'ward.D2', finalLinkage = 'ward.D2')
+
+#Create clusters for patients (colCluster) and features (rowCluster)
+colCluster.2<-cutree(colCluster,k=2)
+colCluster.3<-cutree(colCluster,k=3)
+Cluster = as.data.frame(as.matrix(colCluster.2));
+
+resultFeatures = ConsensusClusterPlus(t(data_vals), maxK=12, reps=50, pItem= 0.8, clusterAlg= "hc", distance="euclidean", innerLinkage= 'ward.D2', finalLinkage = 'ward.D2')
+rowCluster.2<-cutree(rowCluster,k=2)
+rowCluster.3<-cutree(rowCluster,k=3)
+rowCluster.4<-cutree(rowCluster,k=4)
+rowCluster.5<-cutree(rowCluster,k=5)
+
+sig1 <- sigclust(myData,10000,labflag=1,label=colCluster.2,icovest=3)
+plot(sig1,arg="all")
+
+categories <- data.frame(dataLabels,colCluster.2,colCluster.3)
+categoriesFeatures <- data.frame(featureLabels,rowCluster.2,rowCluster.3,rowCluster.4,rowCluster.5)
+
+```
+
+```{r Create Final Dataframe for Visualization and Analysis}
+
+names(categories)[names(categories) == 'dataLabels'] <- 'SubjectID'
+KMdata = merge(categories,covars, by.x="SubjectID", by.y = "SubjectID")
+
+```
+
+
+```{r Radiomic Phenotype Heatmap}
+
+#Two Clusters
+clstr <- colByValue(as.matrix(KMdata$colCluster.2),    #Cluster group
+                    col= c("#002BFF", "#FF000C"))
+
+
+#Define variables, colors, and levels for additional covariates
+vars = c("smokingStatusQuant","packYearMod","ALKDisc","KRASDisc","EGFRDisc",
+         "HistologyDisc")
+clors = c("Purples","YlOrRd","Set2","Paired","Dark2","YlOrBr")
+lvls = c(3,30,3,3,3,4)
+
+for(i in 1:length(vars)){
+  print(i)
+  lol <- brewer.pal(lvls[i],clors[i])
+  temp <- colByValue(as.matrix(KMdata[names(KMdata) == vars[i]]),   #smoking status
+                    col= lol)
+  clstr = cbind(clstr,temp)
+}
+
+# Add gender, manually defined colors for covariates in the heatmap 
+temp <- colByValue(as.matrix(KMdata$GenderQuant),    #Sex
+                   col= c("#f542b0", "#42adf5"))
+clstr = cbind(clstr,temp)
+
+
+lol = heat.colors(1000, 1, rev = FALSE)
+survtime <- colByValue(as.matrix(KMdata$progTime),   #survtime
+                   col= lol)
+
+
+survevent <- colByValue(as.matrix(KMdata$RecurrenceEvent), 
+                    col= c("#fdcc8a","#d7301f"))
+
+features2 <- colByValue(as.matrix(rowCluster.2), 
+                        col= c("#f2161d","#0e3bf0"))
+
+features5 <- colByValue(as.matrix(rowCluster.5), 
+                        col= c("#f7db07","#4bf707","#f507e1","#07f5ed","#f77205"))
+
+## concatenate the matrix
+col_combos.train<-cbind(clstr,survtime,survevent)
+row_combos<-cbind(features5,features2)
+
+
+## Add names for each covariate listed above
+NAME = names(KMdata)
+colnames(col_combos.train)<-c("Radiomic Phenotype","Smoking Status","Pack Years","ALK Translocation Status",
+                                   "KRAS Mutation Status","EGFR Mutation Status","Histology","Sex","Progession Time",
+                                   "Progression Event")
+colnames(row_combos)<-c('clust5','clust2')
+
+
+# plot heatmap
+
+heatmap3(t(myData),margin=c(4,4), 
+         Rowv=as.dendrogram(rowCluster),
+         Colv=as.dendrogram(colCluster),
+         scale="none",
+         ColSideColors=col_combos.train,
+         RowSideColors=row_combos,
+         legendfun=function()
+           showLegend(),
+         revC=T,
+         showColDendro = T,
+         showRowDendro = T,
+         cexRow= 2.0,
+         cexCol= 1.0)
+```
+
+
+```{r KM Curve for recurrence after resection compairing radiomic feature of the pet lung to clinical features}
+
+#Create Cox Proportional Hazards Models for three scenarios (radiomic only, radiomic & clinical, clinical only)
+fit_pheno <- coxph(Surv(KMdata$progTime, KMdata$RecurrenceEvent)~ KMdata$colCluster.2, method = "breslow") #Only Radiomic
+summary(fit_pheno)
+
+fit_rad_clin <- coxph(Surv(KMdata$progTime, KMdata$RecurrenceEvent)~ data.matrix(KMdata[,c("colCluster.2","GenderQuant","HistologyDisc","EGFRDisc","KRASDisc","ALKDisc","packYearMod","smokingStatusQuant")]), method = "breslow") #Radiomic & Clinical
+summary(fit_rad_clin)
+
+fit_clin <- coxph(Surv(KMdata$progTime, KMdata$RecurrenceEvent)~ data.matrix(KMdata[,c("GenderQuant","HistologyDisc","EGFRDisc","KRASDisc","ALKDisc","packYearMod","smokingStatusQuant")]), method = "breslow") #Clinical
+summary(fit_clin)
+
+
+#Generate Predictions for Survival Models
+pred <- data.frame(pheno = predict(fit_pheno, type="lp"),
+                   fit_rad_clin = predict(fit_rad_clin, type="lp"),
+                   fit_clin = predict(fit_clin, type="lp"))
+
+
+
+###-------Create Risk Groups for KM Plots-------
+jjj <- pred
+
+for(i in 1:ncol(jjj)){
+if(length(unique(pred[,i]))==2){
+  thr <- median(unique(pred[,i]), na.rm = FALSE)
+}else{
+  thr <- median(jjj[,i], na.rm = FALSE)
+}
+
+for (z in 1: length(jjj[,i])){
+  if (jjj[z,i] > thr){
+    jjj[z,i] <- 1
+  } else {
+    jjj[z,i] <- 0
+  }
+}
+}
+###-------End Risk Groups-------
+
+
+for(i in 1:ncol(jjj)){
+fit <- survfit(Surv(KMdata$progTime, KMdata$RecurrenceEvent) ~ jjj[,i], data = KMdata)
+titr <- paste("Prognostic score")
+legend.title = titr
+upleg <- paste("Low Risk") 
+dwnleg <- paste("High Risk")
+
+
+plot_obj = ggsurvplot(fit, data = KMdata,
+           legend.title = titr,
+           legend.labs = c(upleg, dwnleg),
+           xlab="Time (days)",
+           ylab="Survival probability",
+           font.legend = c(17, "plain"),
+           pval = TRUE,
+           risk.table=TRUE,
+           risk.table.col="strata",
+           conf.int =FALSE,
+           palette = c("#2E9FDF", "red"),#E7B800
+           ggtheme = theme_bw(), # Change ggplot2 theme
+           font.main = c(16, "bold"),
+           font.x = c(14, "bold"),
+           font.y = c(14, "bold"),
+           font.tickslab = c(13, "plain")
+)
+print(plot_obj)
+}
+```
